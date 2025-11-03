@@ -5,6 +5,7 @@
 #include <DEVNULL.h>
 #include "UserInterface.h"
 #include "WifiManager.h"
+#include "PrintUtils.h"
 
 UserInterface userInterface;
 
@@ -18,20 +19,23 @@ void setup()
   while (!Serial && millis() - t0 < 5000) { delay(10); } // wait up to 5s for monitor
 #endif
 
+  MultiPrint* multiPrint = new MultiPrint(userInterface.logPrint());
+
+#if SERIAL_DEBUG
+  Serial.begin(115200);
+  multiPrint->addPrint(&Serial);
+#endif
+
   Log.setPrefix(printPrefix);
   Log.setSuffix(printSuffix);
-
-#ifdef SERIAL_DEBUG
-  Serial.begin(115200);
-  Log.begin(LOG_LEVEL_VERBOSE, &Serial);
-#else
-  Log.begin(LOG_LEVEL_VERBOSE, new DEVNULL());
-  auto serialBridge = new SerialBridge("USB-Serial Bridge", "serial", Serial);
+  Log.begin(LOG_LEVEL_VERBOSE, multiPrint);
   Log.setShowLevel(false);
+
+#if !SERIAL_DEBUG
+  auto serialBridge = new SerialBridge("USB-Serial Bridge", "serial", Serial);
   serialBridge->start();
   userInterface.addSerialBridge(*serialBridge);
 #endif
-  Log.setShowLevel(false);
 
   auto uart0Bridge = new SerialBridge("UART0 Bridge", "uart0", Serial0);
   uart0Bridge->start();
@@ -48,6 +52,7 @@ void printTimestamp(Print* _logOutput)
   // char timestamp[30];
   // snprintf(timestamp, 30, "%02u:%02u:%02u.%03u ", time.Hour(), time.Minute(), time.Second(), (uint16_t)millis() % 1000);
   _logOutput->print(millis());
+  _logOutput->print(" ");
 }
 
 void printLogLevel(Print* _logOutput, int logLevel)

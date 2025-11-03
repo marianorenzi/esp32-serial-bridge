@@ -4,12 +4,14 @@
 #include <map>
 
 #include "SerialBridge.h"
+#include "PrintUtils.h"
 
 class UserInterface {
   public:
-    UserInterface() {}
+    UserInterface() : m_logWs("/logws"), m_wsPrint(&m_logWs) {}
 
     void addSerialBridge(SerialBridge& bridge);
+    Print* logPrint() { return &m_wsPrint; }
 
     void start();
 
@@ -30,8 +32,11 @@ class UserInterface {
     std::map<String, BridgeSettings> m_bridges;
     int m_ssidControl;
     int m_passwordControl;
+    AsyncWebSocket m_logWs;
+    WebSocketPrint m_wsPrint;
 
     void addWifiSettingsTab();
+    void addLogsTab();
     void task();
 
     friend void tcpTypeChangedCallback(Control *sender, int type, void* arg);
