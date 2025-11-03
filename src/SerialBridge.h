@@ -4,6 +4,17 @@
 #include <Preferences.h>
 #include "utils.h"
 
+#if defined(CONFIG_IDF_TARGET_ESP32)
+  #define HAS_BLUETOOTH   1
+  #define HAS_BLE         1
+#elif defined(CONFIG_IDF_TARGET_ESP32C3) || defined(CONFIG_IDF_TARGET_ESP32S3)
+  #define HAS_BLUETOOTH   0
+  #define HAS_BLE         1
+#else
+  #define HAS_BLUETOOTH   0
+  #define HAS_BLE         0
+#endif
+
 class SerialBridge {
   public:
     SerialBridge(String name, String code, HardwareSerial& hwSerial);
@@ -23,6 +34,7 @@ class SerialBridge {
       TCP_SERVER,
       TCP_CLIENT,
       BLUETOOTH,
+      BLE,
       COUNT
     };
 
@@ -68,7 +80,16 @@ class SerialBridge {
     static constexpr const char* kTypeStr[] = {
       "TCP Server",
       "TCP Client",
-      "Bluetooth"
+      #if HAS_BLUETOOTH
+      "Bluetooth",
+      #else
+      "Bluetooth (N/A)",
+      #endif
+      #if HAS_BLE
+      "BLE"
+      #else
+      "BLE (N/A)"
+      #endif
     };
     static_assert(static_cast<size_t>(SerialBridge::BridgeType::COUNT) == sizeof(kTypeStr)/sizeof(kTypeStr[0]), "mismatch");
 
@@ -118,6 +139,7 @@ class SerialBridge {
     void tcpServerTask();
     void tcpClientTask();
     void bluetoothTask();
+    void bleTask();
 
     void pumpStreamToStream(Stream& in, Stream& out, uint8_t* buf, size_t cap);
 

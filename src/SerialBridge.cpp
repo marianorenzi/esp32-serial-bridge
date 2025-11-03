@@ -2,7 +2,24 @@
 #include <HardwareSerial.h>
 #include <WiFi.h>
 #include <freertos/FreeRTOS.h>
+#include <mutex>
+
 #include "SerialBridge.h"
+
+#if HAS_CLASSIC_BT
+  #include <BluetoothSerial.h>
+  BluetoothSerial SerialBT;
+#endif
+
+#if HAS_BLE
+  #include <NimBLEDevice.h>
+  #include "NuPacket.hpp"
+  #include "NuStream.hpp"
+#endif
+
+std::mutex g_bleMutex;
+bool g_bleInitialized = false;
+void initBle(String name);
 
 SerialBridge::SerialBridge(String name, String code, HardwareSerial& hwSerial) :
 m_name(name),
@@ -30,6 +47,8 @@ void SerialBridge::start()
     xTaskCreate((TaskFunction_t)(&SerialBridge::tcpClientTask), "TcpClientBridge", 2048, this, 1, nullptr);
   } else if (m_bridgeType == BridgeType::BLUETOOTH) {
     xTaskCreate((TaskFunction_t)(&SerialBridge::bluetoothTask), "BluetoothBridge", 2048, this, 1, nullptr);
+  } else if (m_bridgeType == BridgeType::BLE) {
+    xTaskCreate((TaskFunction_t)(&SerialBridge::bleTask), "BLEBridge", 4096, this, 1, nullptr);
   } else {
     Log.errorln("SerialBridge(%s) unknown bridge type, cannot start", m_code.c_str());
   }
@@ -159,8 +178,6 @@ void SerialBridge::tcpClientTask()
 
   initStream();
 
-  while(1);
-
   WiFiClient client;
   uint8_t buffer[512];
 
@@ -196,60 +213,50 @@ void SerialBridge::tcpClientTask()
   }
 }
 
-#if defined(HAS_BLE_SERIAL)
-  #include <NimBLEDevice.h>
-  #include <NimBLEServer.h>
-  #include <NimBLEUtils.h>
-  #include <NimBLEHIDDevice.h>
-  // If you already use a BLE Serial wrapper, replace the following with it.
-  // Here we sketch a minimal "NUS-like" stream facade.
-  #include <NimBLESerial.h>   // e.g., from h2zero/NimBLE-Arduino extras
-  static NimBLESerial bleSerial("SerialBridge");
-#endif
-
 void SerialBridge::bluetoothTask()
 {
-  initStream();
+  Log.infoln("Bluetooth(%s) started task...", m_code.c_str());
 
-#if defined(HAS_BLE_SERIAL)
-  bleSerial.begin();  // starts advertising; acts as a Stream
-  uint8_t bufBleToSer[244];   // BLE ATT MTU typical payload
-  uint8_t bufSerToBle[244];
+#if !HAS_BLUETOOTH
+  Log.infoln("Bluetooth(%s) not supported by this device...", m_code.c_str());
+  while (1);
+#endif
 
   for (;;) {
-    if (!bleSerial.connected()) {
-      delay(50);
-      continue;
-    }
-
-    // BLE -> Serial
-    int bav = bleSerial.available();
-    while (bav > 0) {
-      size_t n = (bav > (int)sizeof(bufBleToSer)) ? sizeof(bufBleToSer) : (size_t)bav;
-      int r = bleSerial.readBytes(bufBleToSer, n);
-      if (r > 0) m_stream->write(bufBleToSer, (size_t)r);
-      bav = bleSerial.available();
-    }
-
-    // Serial -> BLE
-    int sav = m_stream->available();
-    while (sav > 0 && bleSerial.availableForWrite() > 0) {
-      size_t n = (sav > (int)sizeof(bufSerToBle)) ? sizeof(bufSerToBle) : (size_t)sav;
-      int r = m_stream->readBytes(bufSerToBle, n);
-      if (r > 0) bleSerial.write(bufSerToBle, (size_t)r);
-      sav = m_stream->available();
-    }
-
-    if (bav == 0 && sav == 0) delay(2);
-  }
-
-#else
-  // ESP32-C3 has BLE only; if you don't ship a BLE serial wrapper, keep it neutral.
-  for (;;) {
-    // You can log once here if you keep a flag, but avoid spamming every loop.
     delay(500);
   }
+}
+
+void SerialBridge::bleTask()
+{
+  Log.infoln("BLE(%s) started task...", m_code.c_str());
+
+#if !HAS_BLE
+  Log.infoln("BLE(%s) not supported by this device...", m_code.c_str());
+  while (1);
 #endif
+
+  initStream();
+  initBle("Serial Bridge");
+
+  uint8_t buffer[512];
+  NordicUARTStream bleSerial;
+  bleSerial.start();
+
+  for (;;) {
+    // wait for connection
+    while (!bleSerial.isConnected()) { delay(500); }
+    Log.infoln("BLE(%s) connected to peer", m_code.c_str());
+
+    while (bleSerial.isConnected()) {
+      // BLE -> Serial
+      pumpStreamToStream(bleSerial, *m_stream, buffer, sizeof(buffer));
+      // Serial -> BLE
+      pumpStreamToStream(*m_stream, bleSerial, buffer, sizeof(buffer));
+    }
+
+    Log.infoln("BLE(%s) peer disconnected", m_code.c_str());
+  }
 }
 
 void SerialBridge::pumpStreamToStream(Stream& in, Stream& out, uint8_t* buf, size_t cap) {
@@ -260,4 +267,14 @@ void SerialBridge::pumpStreamToStream(Stream& in, Stream& out, uint8_t* buf, siz
     if (r > 0) out.write(buf, (size_t)r);
     avail = in.available();
   }
+}
+
+void initBle(String name)
+{
+  std::lock_guard<std::mutex> lock(g_bleMutex);
+  if (g_bleInitialized) return;
+  NimBLEDevice::init(name.c_str());
+  NimBLEDevice::getAdvertising()->setName(name.c_str());
+  NordicUARTService::allowMultipleInstances = true;
+  g_bleInitialized = true;
 }
